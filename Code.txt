@@ -1,0 +1,576 @@
+// ---------------- ROI ----------------
+var kogi = ee.Geometry.Polygon([
+  [6.384633300164806, 8.00523783856405],
+  [6.384633300164806, 7.918874512340253],
+  [6.588567015985118, 7.918874512340253],
+  [6.588567015985118, 8.00523783856405]
+]);
+
+Map.centerObject(kogi, 12.5);
+Map.addLayer(kogi, {}, 'ROI')
+
+
+
+// Step 1: Load the classified TIFF image
+var alterationMap = ee.Image("projects/ee-mjfati0086/assets/alteration_prediction");
+
+// Step 2: Define visualization parameters for the 4 classes
+var visParams = {
+  min: 0,
+  max: 3,
+  palette: ['green', 'red', 'blue', 'orange'],  // 0: No Alteration, 1: Calcite, 2: Kaolinite, 3: Iron Oxide
+};
+
+// Step 3: Add the image to the map
+//Map.centerObject(alterationMap, 9); // Center the map based on image extent
+Map.addLayer(alterationMap, visParams, "Alteration Classes");
+
+// // Optional: Print the image object
+// print("Loaded Alteration Prediction TIFF:", alterationMap);
+
+
+// ---------------- DEM and Terrain Derivatives ----------------
+var dem = ee.Image('USGS/SRTMGL1_003').select('elevation').clip(kogi);
+var terrain = ee.Terrain.products(dem);
+var slope = terrain.select('slope').rename('slope');
+var aspect = terrain.select('aspect').rename('aspect');
+var hillshade = terrain.select('hillshade').rename('hillshade');
+
+// Visualize hillshade
+Map.addLayer(hillshade, {min: 0, max: 255, palette: ['black', 'gray', 'white']}, 'Hillshade', false);
+Map.addLayer(slope, {min: 0, max: 60, palette: ['white', 'yellow', 'red']}, 'Slope', false);
+Map.addLayer(aspect, {min: 0, max: 360, palette: ['white', 'green', 'blue']}, 'Aspect', false);
+
+// ---------------- ASTER ----------------
+var asterRaw = ee.ImageCollection("ASTER/AST_L1T_003")
+  .filterBounds(kogi)
+  .filter(ee.Filter.lt('CLOUDCOVER', 0.1))
+  .filter(ee.Filter.calendarRange(11, 3, 'month')) // dry season
+  .median()
+  .clip(kogi);
+  
+  Map.addLayer(asterRaw, {}, 'Raw ASTER', false);
+
+var asterBandNames = ['B01','B02','B3N','B04','B05','B06','B07','B08','B09'];
+var asterBands = asterRaw.select(asterBandNames);
+
+function applyDOS(image, bandNames) {
+  return ee.Image.cat(bandNames.map(function(bandName) {
+    var band = image.select(bandName);
+    var darkObj = band.reduceRegion({
+      reducer: ee.Reducer.percentile([1]),
+      geometry: kogi,
+      scale: 30,
+      maxPixels: 1e9
+    }).get(bandName);
+    var corrected = band.subtract(ee.Number(darkObj)).rename(bandName);
+    return corrected.max(0);
+  }));
+}
+var asterDOS = applyDOS(asterRaw, asterBandNames).clip(kogi);
+Map.addLayer(asterDOS, {}, 'ASTER DOS Corrected', false);
+
+var references = {
+  Calcite:    [0.19, 0.22, 0.23, 0.28, 0.32, 0.31, 0.29, 0.26, 0.22],
+  Dolomite:   [0.18, 0.21, 0.24, 0.26, 0.30, 0.29, 0.27, 0.25, 0.20],
+  Kaolinite:  [0.12, 0.14, 0.16, 0.20, 0.24, 0.23, 0.22, 0.20, 0.18],
+  IronOxide:  [0.42, 0.45, 0.46, 0.38, 0.32, 0.28, 0.25, 0.23, 0.20],
+  Marble:     [0.17, 0.20, 0.22, 0.26, 0.29, 0.27, 0.24, 0.21, 0.18]
+};
+
+function spectralAngle(image, referenceSpectrum, bands) {
+  var ref = ee.Image.constant(referenceSpectrum).toArray();
+  var img = image.select(bands).toArray();
+  var dot = img.multiply(ref).arrayReduce(ee.Reducer.sum(), [0]);
+  var normI = img.multiply(img).arrayReduce(ee.Reducer.sum(), [0]).sqrt();
+  var normR = ref.multiply(ref).arrayReduce(ee.Reducer.sum(), [0]).sqrt();
+  var cosSim = dot.divide(normI.multiply(normR));
+  return cosSim.acos().multiply(180 / Math.PI)
+               .arrayProject([0])
+               .arrayFlatten([['angle']]);
+}
+
+function spectralAngle(image, referenceSpectrum, bands) {
+  var ref = ee.Image.constant(referenceSpectrum).toArray();
+  var img = image.select(bands).toArray();
+  var dot = img.multiply(ref).arrayReduce(ee.Reducer.sum(), [0]);
+  var normI = img.multiply(img).arrayReduce(ee.Reducer.sum(), [0]).sqrt();
+  var normR = ref.multiply(ref).arrayReduce(ee.Reducer.sum(), [0]).sqrt();
+  var cosSim = dot.divide(normI.multiply(normR));
+  return cosSim.acos().multiply(180 / Math.PI).arrayProject([0]).arrayFlatten([['angle']]);
+}
+
+var samColors = {
+  Calcite:   'red',
+  Dolomite:  'blue',
+  Kaolinite: 'green',
+  IronOxide: 'orange',
+  Marble:    'purple'
+};
+
+var samImage = ee.Image([]);
+function spectralAngle(image, referenceSpectrum, bands) {
+  var ref = ee.Image.constant(referenceSpectrum).toArray();
+  var img = image.select(bands).toArray();
+  var dot = img.multiply(ref).arrayReduce(ee.Reducer.sum(), [0]);
+  var normI = img.multiply(img).arrayReduce(ee.Reducer.sum(), [0]).sqrt();
+  var normR = ref.multiply(ref).arrayReduce(ee.Reducer.sum(), [0]).sqrt();
+  var cosSim = dot.divide(normI.multiply(normR));
+  return cosSim.acos().multiply(180 / Math.PI).arrayProject([0]).arrayFlatten([['angle']]);
+}
+
+var samColors = {
+  Calcite:   'red',
+  Dolomite:  'blue',
+  Kaolinite: 'green',
+  IronOxide: 'orange',
+  Marble:    'purple'
+};
+var samImage = ee.Image([]);
+
+Object.keys(references).forEach(function(mineral) {
+  var angle = spectralAngle(asterDOS, references[mineral], asterBandNames).rename(mineral + '_SAM');
+  samImage = samImage.addBands(angle);
+  var mask = angle.lt(5).selfMask().rename(mineral + '_Mask');
+  Map.addLayer(angle, {min: 0, max: 45, palette: ['purple', 'white','orange','green','blue','red']}, mineral + ' SAM Angle', false);
+});
+
+// // ===================== SAM ANGLE LEGEND (0–5°) =====================
+// var samLegend = ui.Panel({
+//   style: {
+//     position: 'bottom-center',
+//     padding: '8px',
+//     backgroundColor: 'rgba(255, 255, 255, 0.8)',
+//     border: '1px solid gray',
+//     width: 'auto',
+//     stretch: 'horizontal'
+//   }
+// });
+
+// // Title
+// samLegend.add(ui.Label({
+//   value: 'SAM Angle (°): 0° - 45°',
+//   style: {
+//     fontWeight: 'bold',
+//     fontSize: '14px',
+//     margin: '0 0 6px 0',
+//     textAlign: 'center'
+//   }
+// }));
+
+// // Color bar using the updated palette
+// var makeColorBar = function(palette) {
+//   return ui.Thumbnail({
+//     image: ee.Image.pixelLonLat().select(0),
+//     params: {
+//       bbox: [0, 0, 1, 0.1],
+//       dimensions: '256x10',
+//       format: 'png',
+//       min: 0,
+//       max: 1,
+//       palette: palette
+//     },
+//     style: {stretch: 'horizontal', margin: '0px 8px', maxHeight: '20px'}
+//   });
+// };
+
+// var colorBar = makeColorBar(['purple', 'white', 'orange', 'green', 'blue', 'red']);
+// samLegend.add(colorBar);
+
+// // Tick labels (adjusted for 0–45° scale)
+// var tickPanel = ui.Panel({
+//   layout: ui.Panel.Layout.flow('horizontal'),
+//   style: {stretch: 'horizontal', margin: '4px 0 0 0'}
+// });
+
+// [0, 10, 25, 35, 45].forEach(function(tick) {
+//   tickPanel.add(ui.Label({
+//     value: tick.toString(),
+//     style: {margin: '0px 24px', fontSize: '10px'}
+//   }));
+// });
+// samLegend.add(tickPanel);
+
+// // Add to the map
+// Map.add(samLegend);
+
+
+// // ------------------------ Plot Line Chart ------------------------
+// var chart = ui.Chart.feature.groups({
+//   features: spectralFC,
+//   xProperty: 'Wavelength (µm)',
+//   yProperty: 'Reflectance',
+//   seriesProperty: 'Mineral'
+// }).setChartType('LineChart')
+//   .setOptions({
+//     title: 'Spectral Reflectance Curves of Alteration Minerals',
+//     hAxis: {title: 'Wavelength (µm)', gridlines: {count: 10}},
+//     vAxis: {title: 'Reflectance', minValue: 0, maxValue: 0.5},
+//     colors: ['red', 'blue', 'green', 'orange', 'black'],
+//     lineWidth: 3,
+//     pointSize: 4,
+//     legend: {position: 'right'}
+//   });
+
+// print(chart);
+
+// ============================== P  C  A ============================================
+// ---------------- Step 1: Select and Clip ASTER Bands ---------------------
+var bands = ['B01', 'B02', 'B3N', 'B04', 'B05', 'B06', 'B07', 'B08', 'B09'];
+var image = asterDOS.select(bands).clip(kogi);  // asterDOS should be your corrected ASTER image
+
+// ---------------- Step 2: Display False-Color Composite -------------------
+Map.addLayer(image, {
+  bands: ['B09', 'B06', 'B3N'],
+  min: 0.0,
+  max: 0.3,
+  gamma: 1.4
+}, 'ASTER SWIR Composite');
+
+// ---------------- Step 3: Convert to Array for PCA ------------------------
+var imageArray = image.toArray();
+var bandNames = image.bandNames();
+print('ASTER Band Names:', bandNames);
+
+// ---------------- Step 4: Compute Mean of Each Band -----------------------
+var meanDict = image.reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: kogi,
+  scale: 30,
+  maxPixels: 1e13
+});
+
+// ---------------- Step 5: Normalize (Subtract Band Means) -----------------
+var meanValues = meanDict.values(bandNames);
+var meanImage = ee.Image.constant(meanValues).rename(bandNames);
+var normalized = image.subtract(meanImage);
+
+// ---------------- Step 6: Convert to Array for Covariance -----------------
+var arrayImage = normalized.toArray();
+
+// ---------------- Step 7: Compute Covariance Matrix -----------------------
+var covar = arrayImage.reduceRegion({
+  reducer: ee.Reducer.covariance(),
+  geometry: kogi,
+  scale: 30,
+  maxPixels: 1e13
+});
+
+var covarArray = ee.Array(covar.get('array'));
+print('Covariance Matrix:', covarArray);
+
+// ---------------- Step 8: Eigen Decomposition -----------------------------
+var eigens = covarArray.eigen();
+var eigenValues = eigens.slice(1, 0, 1);
+var eigenVectors = eigens.slice(1, 1);
+print('Eigenvalues:', eigenValues);
+print('Eigenvectors:', eigenVectors);
+
+// ---------------- Step 9: Flatten ASTER Image to Array ---------------------
+var flatArray = image.toArray().toArray(1);  // shape: [bands x 1]
+
+// ---------------- Step 10: Project to PCA Space ----------------------------
+var principalComponents = ee.Image(eigenVectors).matrixMultiply(flatArray);
+
+// ---------------- Step 11: Convert to Scalar Bands -------------------------
+var pcImage = principalComponents
+  .arrayProject([0])
+  .arrayFlatten([[
+    'PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8','PC9'
+  ]]);
+
+// ---------------- Step 12: Display PCA Components --------------------------
+Map.addLayer(pcImage.select('PC1'), {min: -0.5, max: 0.5, palette: ['blue', 'green', 'red']}, 'ASTER PCA - PC1', false);
+Map.addLayer(pcImage.select('PC2'), {min: -0.5, max: 0.5, palette: ['blue', 'green', 'red']}, 'ASTER PCA - PC2', false);
+Map.addLayer(pcImage.select('PC3'), {min: -0.5, max: 0.5, palette: ['blue', 'green', 'red']}, 'ASTER PCA - PC3', false);
+Map.addLayer(pcImage.select(['PC1', 'PC2', 'PC3']), {min: -2, max: 2}, 'PCA RGB (PC1-PC2-PC3)', false);
+Map.addLayer(pcImage.select(['PC2', 'PC3', 'PC5']), {min: -2, max: 2}, 'PCA RGB (PC2-PC3-PC5)', false);
+Map.addLayer(pcImage.select(['PC2', 'PC3', 'PC4']), {min: -2, max: 2}, 'PCA RGB (PC2-PC3-PC4)', false);
+
+// Step 1: Load the alteration prediction TIFF
+var alterationMap = ee.Image("projects/ee-mjfati0086/assets/alteration_prediction");
+
+// Step 2: Mask out "No Alteration" (value = 0)
+var maskedAlteration = alterationMap.updateMask(alterationMap.neq(0));
+
+// Step 3: Define visualization parameters for only 1–3 classes
+var visParams = {
+  min: 1,
+  max: 3,
+  palette: ['Brown', 'purple', 'orange'],  // 1: Calcite, 2: Kaolinite, 3: Iron Oxide
+};
+Map.addLayer(maskedAlteration, visParams, "Alteration Zones (No-Alteration Masked)");
+
+// Assume `alterationMap` is already defined and loaded from earlier
+// Step 1: Mask for Calcite only (value = 1)
+var calcite = alterationMap.updateMask(alterationMap.eq(1));
+Map.addLayer(calcite, {palette: ['Brown'], min: 1, max: 1}, "Calcite Only");
+
+// Step 2: Mask for Kaolinite only (value = 2)
+var kaolinite = alterationMap.updateMask(alterationMap.eq(2));
+Map.addLayer(kaolinite, {palette: ['purple'], min: 2, max: 2}, "Kaolinite Only");
+
+// Step 3: Mask for Iron Oxide only (value = 3)
+var ironOxide = alterationMap.updateMask(alterationMap.eq(3));
+Map.addLayer(ironOxide, {palette: ['orange'], min: 3, max: 3}, "Iron Oxide Only");
+
+// Create the legend panel
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px',
+    backgroundColor: 'white'
+  }
+});
+
+// Create a panel for the legend
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px',
+    fontSize: '16px'
+  }
+});
+
+// Title of the legend
+var legendTitle = ui.Label({
+  value: 'Mineral Alteration Types',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '16px',
+    margin: '0 0 6px 0',
+    padding: '0'
+  }
+});
+legend.add(legendTitle);
+
+// Function to create legend items
+function makeLegendItem(color, name) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '10px',
+      margin: '4px',
+      fontSize: '12px'
+    }
+  });
+
+  var description = ui.Label({
+    value: name,
+    style: {
+      margin: '4px 0 4px 6px',
+      fontSize: '12px'
+    }
+  });
+
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+}
+
+// Add legend entries
+legend.add(makeLegendItem('black', 'Oxidation Zone (Iron oxide)'));
+legend.add(makeLegendItem('red', 'Propylitic Zone (Calcite)'));
+legend.add(makeLegendItem('magenta', 'Mixed Argillic Zone (Kaolinite + Calcite)'));
+legend.add(makeLegendItem('white', 'Advanced Argillic Zone (Clay + Silica)'));
+legend.add(makeLegendItem('yellow', 'Intermediate Argillic Zone (Inferred)'));
+legend.add(makeLegendItem('blue', 'Silicification Zone (Uncertain)'));
+legend.add(makeLegendItem('green', 'Unknown / Non-Altered'));
+
+// Add the legend to the map
+Map.add(legend);
+
+
+
+// // Optional: Print image info
+// print("Masked Alteration Prediction:", maskedAlteration);
+
+
+// // ---------------- Final Stacked Image ----------------
+
+// // Rename DEM
+// var elevation = dem.rename('elevation');
+// var asterCorrected = asterDOS.select(['B09', 'B08', 'B07','B05', 'B06', 'B3N']);
+// var pcaSubset = pcImage.select(['PC2', 'PC3', 'PC5']);
+
+// // Ensure individual SAM mineral images are extracted properly
+// var Calcite = samImage.select('Calcite_SAM');
+// var Kaolinite = samImage.select('Kaolinite_SAM');
+// var IronOxide = samImage.select('IronOxide_SAM');
+// var samSubset = ee.Image.cat([Calcite, Kaolinite, IronOxide]);  // Stack the three SAM images into one
+
+// // Final stacked image
+// var ImageG = pcaSubset
+//   .addBands(asterCorrected)
+//   .addBands(elevation)
+//   .addBands(samSubset);  // Only Calcite, Kaolinite, IronOxide included
+
+// print(ImageG, '✅ Final Stacked ImageG');
+
+// // ---------------- All Band Names ----------------
+// var Bands = [
+//   'PC2', 'PC3', 'PC5',
+//   'B09', 'B08', 'B07', 'B05', 'B06', 'B3N',
+//   'Calcite_SAM', 'Kaolinite_SAM', 'IronOxide_SAM'
+// ];
+// print('All Bands:', Bands);
+
+// // ---------------- Merge and Clip Samples ----------------
+// var samples = No_Alteration
+//   .merge(Calcite_pts)
+//   .merge(Kaolinite_pts)
+//   .merge(IronOxide_pts)
+//   .filterBounds(kogi);  // ✅ Clip to ROI
+
+// print('Clipped Samples:', samples);
+
+// // ---------------- Sample the ImageG at Sample Points ----------------
+// var trainingSamples = ImageG.select(Bands).sampleRegions({
+//   collection: samples,
+//   properties: ['class'],
+//   scale: 30,
+//   geometries: true
+// });
+
+// // ---------------- Sample Regions ----------------
+// var Training = ImageG.sampleRegions({
+//   collection: samples,
+//   properties: ['class'],
+//   scale: 30,
+//   geometries: true
+// }).filterBounds(kogi);  // ✅ Ensure training data is within ROI
+
+// print('Training (Clipped):', Training);
+
+
+// // ---------------- Split Train/Test ----------------
+// var withRandom = Training.randomColumn();
+// var trainSet = withRandom.filter(ee.Filter.lt('random', 0.7));
+// var testSet = withRandom.filter(ee.Filter.gte('random', 0.7));
+
+// // ---------------- Train RF ----------------
+// var rf = ee.Classifier.smileRandomForest({
+//   numberOfTrees: 50,
+//   seed: 42
+// }).train({
+//   features: trainSet,
+//   classProperty: 'class',
+//   inputProperties: Bands
+// });
+
+// // ---------------- Classify Image ----------------
+// var classified = ImageG.classify(rf);
+// Map.addLayer(classified.clip(kogi), {
+//   min: 0, max: 3,
+//   palette: ['gray', 'red', 'green', 'blue']
+// }, 'RF Classification');
+
+// // ---------------- Validate ----------------
+// var validated = testSet.classify(rf);
+// var cm = validated.errorMatrix('class', 'classification');
+// print('Confusion Matrix:', cm);
+// print('Overall Accuracy:', cm.accuracy());
+
+// // ---------------- Feature Importance ----------------
+// var importance = ee.Dictionary(rf.explain());
+// print('Feature Importance:', importance);
+
+// // ---------------- Masked Mineral Classes ----------------
+
+// // No Alteration (class 0)
+// var noAlterationMask = classified.eq(0).updateMask(classified.eq(0));
+// Map.addLayer(noAlterationMask.clip(kogi),
+//   {palette: ['gray']}, 'Predicted: No Alteration');
+
+// // Calcite (class 1)
+// var calciteMask = classified.eq(1).updateMask(classified.eq(1));
+// Map.addLayer(calciteMask.clip(kogi),
+//   {palette: ['red']}, 'Predicted: Calcite');
+
+// // Kaolinite (class 2)
+// var kaoliniteMask = classified.eq(2).updateMask(classified.eq(2));
+// Map.addLayer(kaoliniteMask.clip(kogi),
+//   {palette: ['green']}, 'Predicted: Kaolinite');
+
+// // Iron Oxide (class 3)
+// var ironOxideMask = classified.eq(3).updateMask(classified.eq(3));
+// Map.addLayer(ironOxideMask.clip(kogi),
+//   {palette: ['blue']}, 'Predicted: Iron Oxide');
+
+
+// // ---------------- Sample Regions ----------------
+// var Training = ImageG.sampleRegions({
+//   collection: samples,
+//   properties: ['class'],
+//   scale: 30,
+//   geometries: true
+// }).filterBounds(kogi);  // ✅ Ensure training data is within ROI
+
+// print('Training (Clipped):', Training);
+
+// // ---------------- Split Train/Test ----------------
+// var withRandom = Training.randomColumn();
+// var trainSet = withRandom.filter(ee.Filter.lt('random', 0.7));
+// var testSet = withRandom.filter(ee.Filter.gte('random', 0.7));
+
+// // ---------------- Train RF with Hyperparameters ----------------
+// var rf = ee.Classifier.smileRandomForest({
+//   numberOfTrees: 100,           // Increased trees for better generalization
+//   variablesPerSplit: 3,         // Number of variables per node split
+//   minLeafPopulation: 5,         // Minimum samples in each leaf
+//   bagFraction: 0.7,             // Fraction of training data used per tree
+//   seed: 42
+// }).train({
+//   features: trainSet,
+//   classProperty: 'class',
+//   inputProperties: Bands
+// });
+
+// // ---------------- Classify Image ----------------
+// var classified = ImageG.classify(rf);
+// Map.addLayer(classified.clip(kogi), {
+//   min: 0, max: 3,
+//   palette: ['gray', 'red', 'green', 'blue']
+// }, 'RF Classification');
+
+// // ---------------- Validate ----------------
+// var validated = testSet.classify(rf);
+// var cm = validated.errorMatrix('class', 'classification');
+// print('Confusion Matrix:', cm);
+// print('Overall Accuracy:', cm.accuracy());
+
+// // ---------------- Feature Importance ----------------
+// var importance = ee.Dictionary(rf.explain());
+// print('Feature Importance:', importance);
+
+// // ---------------- Masked Mineral Classes ----------------
+
+// // No Alteration (class 0)
+// var noAlterationMask = classified.eq(0).updateMask(classified.eq(0));
+// Map.addLayer(noAlterationMask.clip(kogi),
+//   {palette: ['gray']}, 'Predicted: No Alteration');
+
+// // Calcite (class 1)
+// var calciteMask = classified.eq(1).updateMask(classified.eq(1));
+// Map.addLayer(calciteMask.clip(kogi),
+//   {palette: ['red']}, 'Predicted: Calcite');
+
+// // Kaolinite (class 2)
+// var kaoliniteMask = classified.eq(2).updateMask(classified.eq(2));
+// Map.addLayer(kaoliniteMask.clip(kogi),
+//   {palette: ['green']}, 'Predicted: Kaolinite');
+
+// // Iron Oxide (class 3)
+// var ironOxideMask = classified.eq(3).updateMask(classified.eq(3));
+// Map.addLayer(ironOxideMask.clip(kogi),
+//   {palette: ['blue']}, 'Predicted: Iron Oxide');
+
+
+
+
+
+
+
+
+
